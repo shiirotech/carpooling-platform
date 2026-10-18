@@ -1,8 +1,12 @@
 import express, { Express, Request, Response } from 'express';
 import morgan from 'morgan';
+import dotenv from 'dotenv';
+import authRoutes from './routes/auth.routes.js';
+
+dotenv.config();
 
 const app: Express = express();
-const port = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json()); // parses incoming JSON payloads
@@ -13,6 +17,8 @@ app.get('/api/ping', (req: Request, res: Response) => {
     res.json({message: 'Carpooling API is running'});
 });
 
-app.listen(port, () => {
-    console.log(`Server is listening on port ${port}`);
+app.use('/api/auth', authRoutes);
+
+app.listen(PORT, () => {
+    console.log(`Server is listening on port ${PORT}`);
 });

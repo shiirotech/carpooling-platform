@@ -1,9 +1,12 @@
 import sqlite3 from 'sqlite3';
 import bcrypt from 'bcrypt';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const db = new sqlite3.Database('carpooling.db', (err) => {
     if (err) {
-        console.error('Error opening database:', err.message);
+        console.error('Error opening database: ', err.message);
         process.exit(1);
     }
     console.log('Connected to the SQLite database');
@@ -100,8 +103,11 @@ db.serialize(() => {
     );
 
     // Generate a reusable password hash for all demo accounts
-    const defaultPassword = 'password123';
-    const hash = bcrypt.hashSync(defaultPassword, 10);
+    const DEFAULT_USER_PASSWORD = process.env.DEFAULT_USER_PASSWORD;
+    if (!DEFAULT_USER_PASSWORD) {
+        throw new Error('FATAL ERROR: DEFAULT_USER_PASSWORD is not defined in the .env file');
+    }
+    const hash = bcrypt.hashSync(DEFAULT_USER_PASSWORD, 10);
 
     console.log('Inserting demo users...');
 

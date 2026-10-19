@@ -13,7 +13,7 @@ if (!JWT_SECRET) {
 }
 
 export const register = (req: Request, res: Response): void => {
-    const { name, email, password } = req.body;
+    const { name, email, password, roles } = req.body;
 
     if (!name || !email || !password) {
         res.status(400).json({ error: 'Provide name, email and password' });
@@ -21,12 +21,13 @@ export const register = (req: Request, res: Response): void => {
     }
 
     // default role will be Passenger
-    const roles = 'Passenger';
+    const allowedRoles = ['Passenger', 'Driver', 'Driver,Passenger'];
+    const userRole = roles && allowedRoles.includes(roles) ? roles : 'Passenger';
     const password_hash = bcrypt.hashSync(password, 10);
 
     const query = `INSERT INTO users (name, email, password_hash, roles) VALUES (?, ?, ?, ?)`;
 
-    db.run(query, [name, email, password_hash, roles], function(err) {
+    db.run(query, [name, email, password_hash, userRole], function(err) {
         if (err) {
             if (err.message.includes('UNIQUE')) {
                 res.status(409).json({ error: 'Email is already in use' });
@@ -40,10 +41,10 @@ export const register = (req: Request, res: Response): void => {
             id: this.lastID,
             name,
             email,
-            roles
+            roles: userRole
         };
 
-        res.status(201).json({ message: 'User registered successfully!', user: newUser });
+        res.status(201).json({ message: 'User registered successfully', user: newUser });
     });
 };
 

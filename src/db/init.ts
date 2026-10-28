@@ -39,7 +39,7 @@ db.serialize(() => {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             make TEXT NOT NULL,
             model TEXT NOT NULL,
-            plate_number TEXT NOT NULL,
+            plate_number TEXT UNIQUE NOT NULL,
             seats INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users (id)
@@ -164,6 +164,7 @@ db.serialize(() => {
     const bookings = [
         [1, 'pending', 1, 5], // ride 1, pass 1
         [1, 'accepted', 3, 6], // ride 3, pass 2
+        [1, 'accepted', 3, 7], // ride 3, pass 3
         [1, 'accepted', 4, 8], // ride 4, pass 4
         [1, 'rejected', 5, 5], // ride 5, pass 1
         [1, 'accepted', 9, 6], // ride 9, pass 2

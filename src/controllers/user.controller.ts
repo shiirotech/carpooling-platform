@@ -127,11 +127,11 @@ export const updateUserRoles = (req: AuthRequest, res: Response): void => {
     const { roles: newRoles } = req.body;
 
     if (!newRoles) {
-        res.status(400).json({ error: 'New role(s) must be provided' });
+        res.status(400).json({ error: 'New roles must be provided' });
         return;
     }
 
-    // fetch user's current role(s)
+    // fetch user's current roles
     const getUserQuery = `SELECT roles FROM users WHERE id = ?`;
     db.get(getUserQuery, [target_id], (err, targetRow: { roles: string }) => {
         if (err) {

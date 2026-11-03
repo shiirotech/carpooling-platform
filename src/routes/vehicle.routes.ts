@@ -9,8 +9,8 @@ import { authenticateToken, requireRole } from '../middleware/auth.middleware.js
 
 const router = Router();
 
-// all vehicle endpoints require the user to be logged in and have the 'Driver' role
-router.use(authenticateToken, requireRole('Driver'));
+// all vehicle endpoints require the user to be logged in and have the 'Driver' or 'Driver,Passenger' role
+router.use(authenticateToken, requireRole('Driver', 'Driver,Passenger'));
 
 router.post('/', createVehicle);
 router.get('/', readVehicles);

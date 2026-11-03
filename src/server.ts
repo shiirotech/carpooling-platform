@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes.js';
 import vehicleRoutes from './routes/vehicle.routes.js';
 import userRoutes from './routes/user.routes.js';
+import rideRoutes from './routes/ride.routes.js';
 
 dotenv.config();
 
@@ -22,6 +23,7 @@ app.get('/api/ping', (_req: Request, res: Response) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/rides', rideRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is listening on port ${PORT}`);

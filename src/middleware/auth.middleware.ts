@@ -39,17 +39,15 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
 };
 
 // quick helper to protect routes meant only for specific roles
-export const requireRole = (requiredRole: string) => {
+export const requireRole = (...allowedRoles: string[]) => {
     return (req: AuthRequest, res: Response, next: NextFunction): void => {
         if (!req.user) {
             res.status(401).json({ error: 'Not authenticated' });
             return;
         }
 
-        const userRoles = req.user.roles.split(',');
-
-        if (!userRoles.includes(requiredRole)) {
-            res.status(403).json({ error: `Access denied. Requires ${requiredRole} role` });
+        if (!allowedRoles.includes(req.user.roles)) {
+            res.status(403).json({ error: `Access denied. Requires one of: ${allowedRoles.join(', ')}` });
             return;
         }
 

@@ -5,6 +5,7 @@ import authRoutes from './routes/auth.routes.js';
 import vehicleRoutes from './routes/vehicle.routes.js';
 import userRoutes from './routes/user.routes.js';
 import rideRoutes from './routes/ride.routes.js';
+import bookingRoutes from './routes/booking.routes.js';
 
 dotenv.config();
 
@@ -24,6 +25,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/rides', rideRoutes);
+app.use('/api/bookings', bookingRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is listening on port ${PORT}`);

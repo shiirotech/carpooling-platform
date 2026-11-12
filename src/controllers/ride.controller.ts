@@ -177,7 +177,8 @@ export const readRideById = (req: Request, res: Response): void => {
 
 export const updateRideStatus = (req: AuthRequest, res: Response): void => {
     const ride_id = Number(req.params.id);
-    const driver_id = req.user?.id;
+    const user_id = req.user?.id;
+    const isAdmin = req.user?.roles === 'Administrator';
     const { status } = req.body;
 
     if (!Number.isInteger(ride_id) || ride_id <= 0) {
@@ -185,7 +186,8 @@ export const updateRideStatus = (req: AuthRequest, res: Response): void => {
         return;
     }
 
-    // Driver can only manually transition to these states
+    // Driver can manually transition to departed, finished or cancelled
+    // Administrator can cancel any ride
     const allowedStatuses = ['departed', 'finished', 'cancelled'];
     
     if (!status || !allowedStatuses.includes(status)) {
@@ -195,29 +197,41 @@ export const updateRideStatus = (req: AuthRequest, res: Response): void => {
         return;
     }
 
-    // fetch current ride status to enforce logical state transitions
-    const getRideQuery = `SELECT status FROM rides WHERE id = ? AND driver_id = ?`;
+    // Admins can only cancel rides (not depart or finish on behalf of drivers)
+    if (isAdmin && status !== 'cancelled') {
+        res.status(400).json({ error: 'Administrators can only cancel rides' });
+        return;
+    }
 
-    db.get(getRideQuery, [ride_id, driver_id], (err, ride: { status: string }) => {
+    // Fetch current ride status and driver_id
+    const getRideQuery = `SELECT id, driver_id, status FROM rides WHERE id = ?`;
+
+    db.get(getRideQuery, [ride_id], (err, ride: { id: number; driver_id: number; status: string }) => {
         if (err) {
             res.status(500).json({ error: 'Database error while verifying ride' });
             return;
         }
 
         if (!ride) {
-            res.status(404).json({ error: 'Ride not found or access denied' });
+            res.status(404).json({ error: 'Ride not found' });
+            return;
+        }
+
+        // Non-admins must own the ride
+        if (!isAdmin && ride.driver_id !== user_id) {
+            res.status(403).json({ error: 'Access denied. You can only update your own rides' });
             return;
         }
 
         const currentStatus = ride.status;
 
-        // Prevent from changing terminal states (dead ends)
+        // Prevent changing terminal states (dead ends)
         if (currentStatus === 'cancelled' || currentStatus === 'finished') {
             res.status(400).json({ error: `Ride is already ${currentStatus} and cannot be changed further` });
             return;
         }
 
-        // Enforce chronological order
+        // Enforce chronological order for drivers
         if (status === 'finished' && currentStatus !== 'departed') {
             res.status(400).json({ error: 'Ride must be marked as departed before it can be finished' });
             return;
@@ -228,16 +242,86 @@ export const updateRideStatus = (req: AuthRequest, res: Response): void => {
             return;
         }
 
-        // If all checks pass, execute the update
+        // update
         const updateQuery = `UPDATE rides SET status = ? WHERE id = ?`;
 
-        db.run(updateQuery, [status, ride_id], function(err) {
-            if (err) {
+        db.run(updateQuery, [status, ride_id], function(updateErr) {
+            if (updateErr) {
                 res.status(500).json({ error: 'Failed to update ride status' });
                 return;
             }
 
-            res.status(200).json({ message: `Ride successfully transitioned to ${status}` });
+            // log
+            const insertRideAuditQuery = `
+                INSERT INTO audit_logs (entity_type, entity_id, old_status, new_status, changed_by_id)
+                VALUES ('Ride', ?, ?, ?, ?)
+            `;
+
+            db.run(insertRideAuditQuery, [ride_id, currentStatus, status, user_id], (auditErr) => {
+                if (auditErr) {
+                    res.status(500).json({ error: 'Ride status updated, but failed to write audit log' });
+                    return;
+                }
+
+                if (status !== 'cancelled') {
+                    res.status(200).json({ message: `Ride successfully transitioned to ${status}` });
+                    return;
+                }
+
+                // If ride is cancelled, we need to apply cancellation to all pending/accepted bookings and write audit logs
+                const getActiveBookingsQuery = `
+                    SELECT id, status FROM bookings 
+                    WHERE ride_id = ? AND status IN ('pending', 'accepted')
+                `;
+
+                db.all(getActiveBookingsQuery, [ride_id], (bErr, activeBookings: { id: number; status: string }[]) => {
+                    if (bErr) {
+                        res.status(500).json({ error: 'Ride cancelled, but failed to retrieve bookings for cascade cancellation' });
+                        return;
+                    }
+
+                    if (!activeBookings || activeBookings.length === 0) {
+                        res.status(200).json({ message: `Ride successfully transitioned to ${status}` });
+                        return;
+                    }
+
+                    const cancelBookingsQuery = `
+                        UPDATE bookings SET status = 'cancelled' 
+                        WHERE ride_id = ? AND status IN ('pending', 'accepted')
+                    `;
+
+                    db.run(cancelBookingsQuery, [ride_id], function(cErr) {
+                        if (cErr) {
+                            res.status(500).json({ error: 'Ride cancelled, but failed to cancel associated bookings' });
+                            return;
+                        }
+
+                        // log
+                        const insertBookingAuditQuery = `
+                            INSERT INTO audit_logs (entity_type, entity_id, old_status, new_status, changed_by_id)
+                            VALUES ('Booking', ?, ?, 'cancelled', ?)
+                        `;
+
+                        let pending = activeBookings.length;
+                        let failed = false;
+
+                        for (const b of activeBookings) {
+                            db.run(insertBookingAuditQuery, [b.id, b.status, user_id], (bAuditErr) => {
+                                if (bAuditErr) {
+                                    failed = true;
+                                }
+                                if (--pending === 0) {
+                                    if (failed) {
+                                        res.status(500).json({ error: 'Bookings cancelled, but failed to write some audit logs' });
+                                    } else {
+                                        res.status(200).json({ message: `Ride successfully transitioned to ${status}` });
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+            });
         });
     });
 };

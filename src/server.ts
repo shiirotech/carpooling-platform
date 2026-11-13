@@ -6,6 +6,7 @@ import vehicleRoutes from './routes/vehicle.routes.js';
 import userRoutes from './routes/user.routes.js';
 import rideRoutes from './routes/ride.routes.js';
 import bookingRoutes from './routes/booking.routes.js';
+import ratingRoutes from './routes/rating.routes.js';
 
 dotenv.config();
 
@@ -18,7 +19,7 @@ app.use(morgan('dev')); // logs reqs to the terminal
 
 
 app.get('/api/ping', (_req: Request, res: Response) => {
-    res.json({message: 'Carpooling API is running'});
+    res.json({ message: 'Carpooling API is running' });
 });
 
 app.use('/api/auth', authRoutes);
@@ -26,6 +27,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/rides', rideRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/ratings', ratingRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is listening on port ${PORT}`);

@@ -91,87 +91,183 @@ export const searchRides = (req: Request, res: Response): void => {
     const origin = req.query.origin as string | undefined;
     const destination = req.query.destination as string | undefined;
     const date = req.query.date as string | undefined;
+    const minSeatsParam = req.query.min_seats as string | undefined;
+    const minPriceParam = req.query.min_price as string | undefined;
+    const maxPriceParam = req.query.max_price as string | undefined;
+    const sortByParam = (req.query.sort_by as string | undefined) || 'departure';
+    const sortOrderParam = ((req.query.sort_order as string | undefined) || 'asc').toLowerCase();
+    const pageParam = req.query.page as string | undefined;
+    const limitParam = req.query.limit as string | undefined;
 
-    // base query: only future rides that are bookable or full
-    let query = `
-        SELECT id, origin, destination, departure, price, seats_offered, status 
-        FROM rides 
-        WHERE departure > datetime('now') 
-        AND status IN ('open', 'full')
-    `;
-    
-    const params: (string | number)[] = [];
-
-    if (origin) {
-        // using LIKE for case-insensitive, partial matching ("Warsaw" matches "Warsaw Central")
-        query += ` AND origin LIKE ?`;
-        params.push(`%${origin}%`);
-    }
-
-    if (destination) {
-        query += ` AND destination LIKE ?`;
-        params.push(`%${destination}%`);
-    }
-
-    if (date) {
-        // use SQLite's date() function to ignore the time of day and match just the calendar date
-        query += ` AND date(departure) = date(?)`;
-        params.push(date);
-    }
-
-    // Order results logically (soonest rides first)
-    query += ` ORDER BY departure ASC`;
-
-    db.all(query, params, (err, rides: any[]) => {
-        if (err) {
-            res.status(500).json({ error: 'Database error while searching for rides' });
+    // Validate date filter if provided
+    if (date !== undefined && date.trim() !== '') {
+        const parsedDate = new Date(date);
+        if (isNaN(parsedDate.getTime())) {
+            res.status(400).json({ error: 'Invalid date format' });
             return;
         }
+    }
 
-        res.status(200).json(rides);
-    });
-};
+    // Validate min_seats filter
+    let minSeats: number | undefined;
+    if (minSeatsParam !== undefined && minSeatsParam.trim() !== '') {
+        minSeats = Number(minSeatsParam);
+        if (!Number.isInteger(minSeats) || minSeats < 0) {
+            res.status(400).json({ error: 'Minimum seats must be a non-negative integer' });
+            return;
+        }
+    }
 
-export const readRideById = (req: Request, res: Response): void => {
-    const ride_id = Number(req.params.id);
+    // Validate price range filters
+    let minPrice: number | undefined;
+    if (minPriceParam !== undefined && minPriceParam.trim() !== '') {
+        minPrice = Number(minPriceParam);
+        if (isNaN(minPrice) || minPrice < 0) {
+            res.status(400).json({ error: 'Minimum price must be a non-negative number' });
+            return;
+        }
+    }
 
-    if (!Number.isInteger(ride_id) || ride_id <= 0) {
-        res.status(400).json({ error: 'Invalid ride ID format' });
+    let maxPrice: number | undefined;
+    if (maxPriceParam !== undefined && maxPriceParam.trim() !== '') {
+        maxPrice = Number(maxPriceParam);
+        if (isNaN(maxPrice) || maxPrice < 0) {
+            res.status(400).json({ error: 'Maximum price must be a non-negative number' });
+            return;
+        }
+    }
+
+    if (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice) {
+        res.status(400).json({ error: 'Minimum price cannot be greater than maximum price' });
         return;
     }
 
-    const query = `
-        SELECT 
-            r.id, 
-            r.origin, 
-            r.destination, 
-            r.departure, 
-            r.price, 
-            r.seats_offered, 
-            r.status,
-            u.name AS driver_name,
-            v.make AS vehicle_make, 
-            v.model AS vehicle_model, 
-            v.plate_number AS vehicle_plate,
-            (r.seats_offered - (SELECT IFNULL(SUM(b.seats), 0) FROM bookings b WHERE b.ride_id = r.id AND b.status = 'accepted')) AS free_seats
-        FROM rides r
-        JOIN users u ON r.driver_id = u.id
-        JOIN vehicles v ON r.vehicle_id = v.id
-        WHERE r.id = ?
+    // Validate sorting parameters (prevent SQL injection)
+    const allowedSortColumns: Record<string, string> = {
+        departure: 'r.departure',
+        price: 'r.price'
+    };
+
+    if (!allowedSortColumns[sortByParam]) {
+        res.status(400).json({ error: "Invalid sorting value. Allowed values are: 'departure', 'price'" });
+        return;
+    }
+
+    if (sortOrderParam !== 'asc' && sortOrderParam !== 'desc') {
+        res.status(400).json({ error: "Invalid sorting order value. Allowed values are: 'asc', 'desc'" });
+        return;
+    }
+
+    const orderByColumn = allowedSortColumns[sortByParam];
+    const orderDirection = sortOrderParam === 'desc' ? 'DESC' : 'ASC';
+
+    // Validate pagination parameters
+    const page = pageParam !== undefined && pageParam.trim() !== '' ? Number(pageParam) : 1;
+    const limit = limitParam !== undefined && limitParam.trim() !== '' ? Number(limitParam) : 10;
+
+    if (!Number.isInteger(page) || page < 1) {
+        res.status(400).json({ error: 'Page must be a positive integer' });
+        return;
+    }
+
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        res.status(400).json({ error: 'Limit must be an integer between 1 and 100' });
+        return;
+    }
+
+    const offset = (page - 1) * limit;
+
+    // Base WHERE clause: only future rides that are bookable or full
+    let whereClause = `
+        WHERE r.departure > datetime('now') 
+        AND r.status IN ('open', 'full')
+    `;
+    const filterParams: (string | number)[] = [];
+
+    if (origin && origin.trim() !== '') {
+        // using LIKE for case-insensitive, partial matching ("Warsaw" matches "Warsaw Central")
+        whereClause += ` AND r.origin LIKE ?`;
+        filterParams.push(`%${origin.trim()}%`);
+    }
+
+    if (destination && destination.trim() !== '') {
+        whereClause += ` AND r.destination LIKE ?`;
+        filterParams.push(`%${destination.trim()}%`);
+    }
+
+    if (date && date.trim() !== '') {
+        // use SQLite's date() function to ignore the time of day and match just the calendar date
+        whereClause += ` AND date(r.departure) = date(?)`;
+        filterParams.push(date.trim());
+    }
+
+    if (minSeats !== undefined) {
+        whereClause += ` AND (r.seats_offered - (SELECT IFNULL(SUM(b.seats), 0) FROM bookings b WHERE b.ride_id = r.id AND b.status = 'accepted')) >= ?`;
+        filterParams.push(minSeats);
+    }
+
+    if (minPrice !== undefined) {
+        whereClause += ` AND r.price >= ?`;
+        filterParams.push(minPrice);
+    }
+
+    if (maxPrice !== undefined) {
+        whereClause += ` AND r.price <= ?`;
+        filterParams.push(maxPrice);
+    }
+
+    // 1. Count total matching rides for pagination metadata
+    const countQuery = `
+        SELECT COUNT(*) AS total 
+        FROM rides r 
+        ${whereClause}
     `;
 
-    db.get(query, [ride_id], (err, ride) => {
-        if (err) {
-            res.status(500).json({ error: 'Database error while fetching ride details' });
+    db.get(countQuery, filterParams, (countErr, countRow: { total: number }) => {
+        if (countErr) {
+            res.status(500).json({ error: 'Database error while counting rides' });
             return;
         }
 
-        if (!ride) {
-            res.status(404).json({ error: 'Ride not found' });
-            return;
-        }
+        const total = countRow ? countRow.total : 0;
+        const totalPages = Math.ceil(total / limit);
 
-        res.status(200).json(ride);
+        // 2. Fetch paginated, sorted ride records with derived free_seats and driver rating
+        const dataQuery = `
+            SELECT 
+                r.id, 
+                r.origin, 
+                r.destination, 
+                r.departure, 
+                r.price, 
+                r.seats_offered, 
+                r.status,
+                u.name AS driver_name,
+                (SELECT ROUND(AVG(rt.value), 2) FROM ratings rt WHERE rt.driver_id = r.driver_id) AS driver_avg_rating,
+                (r.seats_offered - (SELECT IFNULL(SUM(b.seats), 0) FROM bookings b WHERE b.ride_id = r.id AND b.status = 'accepted')) AS free_seats
+            FROM rides r
+            JOIN users u ON r.driver_id = u.id
+            ${whereClause}
+            ORDER BY ${orderByColumn} ${orderDirection}
+            LIMIT ? OFFSET ?
+        `;
+
+        db.all(dataQuery, [...filterParams, limit, offset], (err, rides: any[]) => {
+            if (err) {
+                res.status(500).json({ error: 'Database error while searching for rides' });
+                return;
+            }
+
+            res.status(200).json({
+                data: rides,
+                pagination: {
+                    total,
+                    page,
+                    limit,
+                    totalPages
+                }
+            });
+        });
     });
 };
 

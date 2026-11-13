@@ -271,6 +271,49 @@ export const searchRides = (req: Request, res: Response): void => {
     });
 };
 
+export const readRideById = (req: Request, res: Response): void => {
+    const ride_id = Number(req.params.id);
+
+    if (!Number.isInteger(ride_id) || ride_id <= 0) {
+        res.status(400).json({ error: 'Invalid ride ID format' });
+        return;
+    }
+
+    const query = `
+        SELECT 
+            r.id, 
+            r.origin, 
+            r.destination, 
+            r.departure, 
+            r.price, 
+            r.seats_offered, 
+            r.status,
+            u.name AS driver_name,
+            v.make AS vehicle_make, 
+            v.model AS vehicle_model, 
+            v.plate_number AS vehicle_plate,
+            (r.seats_offered - (SELECT IFNULL(SUM(b.seats), 0) FROM bookings b WHERE b.ride_id = r.id AND b.status = 'accepted')) AS free_seats
+        FROM rides r
+        JOIN users u ON r.driver_id = u.id
+        JOIN vehicles v ON r.vehicle_id = v.id
+        WHERE r.id = ?
+    `;
+
+    db.get(query, [ride_id], (err, ride) => {
+        if (err) {
+            res.status(500).json({ error: 'Database error while fetching ride details' });
+            return;
+        }
+
+        if (!ride) {
+            res.status(404).json({ error: 'Ride not found' });
+            return;
+        }
+
+        res.status(200).json(ride);
+    });
+};
+
 export const updateRideStatus = (req: AuthRequest, res: Response): void => {
     const ride_id = Number(req.params.id);
     const user_id = req.user?.id;

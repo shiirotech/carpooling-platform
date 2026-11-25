@@ -153,7 +153,12 @@ export const updateVehicle = (req: AuthRequest, res: Response): void => {
                     return;
                 }
 
-                const rideUpdates: [number, string, number][] = [];
+                const rideUpdates: {
+                    rideId: number;
+                    seatsOffered: number;
+                    oldStatus: string;
+                    newStatus: string;
+                }[] = [];
 
                 if (newSeats !== oldSeats) {
                     const delta = newSeats - oldSeats;
@@ -168,14 +173,19 @@ export const updateVehicle = (req: AuthRequest, res: Response): void => {
                                 updatedStatus = 'open';
                             }
                         } else {
-                            updatedSeatsOffered = newSeats - 1
+                            updatedSeatsOffered = newSeats - 1;
                             if (ride.booked_seats >= updatedSeatsOffered) {
                                 updatedStatus = 'full';
                             }
                         }
 
                         if (updatedSeatsOffered !== ride.seats_offered || updatedStatus !== ride.status) {
-                            rideUpdates.push([updatedSeatsOffered, updatedStatus, ride.id]);
+                            rideUpdates.push({
+                                rideId: ride.id,
+                                seatsOffered: updatedSeatsOffered,
+                                oldStatus: ride.status,
+                                newStatus: updatedStatus
+                            });
                         }
                     }
                 }
@@ -187,21 +197,48 @@ export const updateVehicle = (req: AuthRequest, res: Response): void => {
 
                 let pending = rideUpdates.length;
                 let failed = false;
+                let auditFailed = false;
 
                 const updateRideQuery = `UPDATE rides SET seats_offered = ?, status = ? WHERE id = ?`;
+                const insertRideAuditQuery = `
+                    INSERT INTO audit_logs (entity_type, entity_id, old_status, new_status, changed_by_id)
+                    VALUES ('Ride', ?, ?, ?, ?)
+                `;
 
-                for (const params of rideUpdates) {
-                    db.run(updateRideQuery, params, (err) => {
-                        if (err) {
-                            console.error(`Failed to synchronize ride ID ${params[2]}:`, err);
-                            failed = true;
+                const finishOne = () => {
+                    if (--pending === 0) {
+                        if (failed) {
+                            res.status(500).json({ error: 'Vehicle updated, but some rides could not be synchronized' });
+                        } else if (auditFailed) {
+                            res.status(500).json({ error: 'Vehicle and rides updated, but failed to write some audit logs' });
+                        } else {
+                            res.status(200).json({ message: 'Vehicle updated successfully' });
                         }
-                        if (--pending === 0) {
-                            if (failed) {
-                                res.status(500).json({ error: 'Vehicle updated, but some rides could not be synchronized' });
-                            } else {
-                                res.status(200).json({ message: 'Vehicle updated successfully' });
-                            }
+                    }
+                };
+
+                for (const update of rideUpdates) {
+                    db.run(updateRideQuery, [update.seatsOffered, update.newStatus, update.rideId], (rideErr) => {
+                        if (rideErr) {
+                            failed = true;
+                            finishOne();
+                            return;
+                        }
+
+                        if (update.newStatus !== update.oldStatus) {
+                            // log
+                            db.run(
+                                insertRideAuditQuery,
+                                [update.rideId, update.oldStatus, update.newStatus, user_id],
+                                (auditErr) => {
+                                    if (auditErr) {
+                                        auditFailed = true;
+                                    }
+                                    finishOne();
+                                }
+                            );
+                        } else {
+                            finishOne();
                         }
                     });
                 }
